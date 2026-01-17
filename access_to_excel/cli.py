@@ -30,6 +30,9 @@ def parse_args():
     p.add_argument("--input", dest="input_path", help="Path to Access database (.mdb/.accdb)")
     p.add_argument("--dsn", dest="dsn", help="ODBC DSN name (alternative to --input)")
     p.add_argument("--analyze", action="store_true", help="Run analyzer and print summary")
+    p.add_argument("--show-query", dest="show_query", help="Show saved query definition and sample rows")
+    p.add_argument("--limit", type=int, default=15, help="Sample row limit for --show-query (default: 15)")
+    p.add_argument("--param", action="append", help="Parameter override for saved queries in name=value form; repeatable")
     p.add_argument("--verbose", action="store_true", help="Enable debug logging")
     p.add_argument("--version", action="store_true", help="Print version and exit")
     args = p.parse_args()
@@ -139,6 +142,153 @@ def analyze(conn: pyodbc.Connection, db_path: Optional[str]) -> None:
             print(f" - {k}: {v}")
 
 
+def show_query(conn: pyodbc.Connection, db_path: Optional[str], name: str, limit: int, params: Optional[List[str]]) -> None:
+    print(f"=== Saved Query: {name} ===")
+    # Try to display SQL definition via DAO
+    sql_text: Optional[str] = None
+    if db_path:
+        try:
+            import win32com.client as win32  # type: ignore
+            engine = None
+            for progid in ("DAO.DBEngine.120", "DAO.DBEngine.160", "DAO.DBEngine"):
+                try:
+                    engine = win32.Dispatch(progid)
+                    break
+                except Exception:
+                    continue
+            if engine is not None:
+                db = engine.OpenDatabase(db_path)
+                try:
+                    for q in db.QueryDefs:
+                        if str(q.Name).lower() == name.lower():
+                            sql_text = str(q.SQL)
+                            # Try to print parameters metadata
+                            try:
+                                params_info = []
+                                for p in q.Parameters:
+                                    pname = str(p.Name)
+                                    # Type codes are DAO constants; we print raw value
+                                    ptype = getattr(p, 'Type', None)
+                                    params_info.append((pname, ptype))
+                                if params_info:
+                                    print("Parameters:")
+                                    for pname, ptype in params_info:
+                                        print(f" - {pname} (Type={ptype})")
+                            except Exception:
+                                pass
+                            break
+                finally:
+                    try:
+                        db.Close()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    if sql_text:
+        print("Definition:")
+        print(sql_text)
+    else:
+        print("Definition: (not available) Install 'pywin32' to enable DAO QueryDefs reading.")
+
+    # Try DAO execution (supports Access functions and parameterized queries)
+    executed = False
+    if db_path:
+        try:
+            import re
+            import win32com.client as win32  # type: ignore
+            engine = None
+            for progid in ("DAO.DBEngine.120", "DAO.DBEngine.160", "DAO.DBEngine"):
+                try:
+                    engine = win32.Dispatch(progid)
+                    break
+                except Exception:
+                    continue
+            if engine is not None:
+                db = engine.OpenDatabase(db_path)
+                try:
+                    qdef = None
+                    for q in db.QueryDefs:
+                        if str(q.Name).lower() == name.lower():
+                            qdef = q
+                            break
+                    if qdef is not None:
+                        # Apply parameters if provided
+                        provided: Dict[str, str] = {}
+                        if params:
+                            for p in params:
+                                if "=" in p:
+                                    k, v = p.split("=", 1)
+                                    provided[k.strip().lower()] = v
+                        # Normalize and set values
+                        for p in qdef.Parameters:
+                            pname = str(p.Name)
+                            keys_to_try = [pname.lower()]
+                            # Try bracket content
+                            m = re.search(r"\[(.*?)\]", pname)
+                            if m:
+                                keys_to_try.append(m.group(1).lower())
+                            # Try segment after dot
+                            if "." in pname:
+                                keys_to_try.append(pname.split(".")[-1].lower())
+                            val = None
+                            for k in keys_to_try:
+                                if k in provided:
+                                    val = provided[k]
+                                    break
+                            if val is not None:
+                                try:
+                                    p.Value = val
+                                except Exception:
+                                    pass
+                        rs = qdef.OpenRecordset()
+                        try:
+                            # Print header
+                            cols = [str(f.Name) for f in rs.Fields]
+                            print(f"Sample Rows (limit={limit}) via DAO:")
+                            print(",".join(cols))
+                            count = 0
+                            while count < limit and (not rs.EOF):
+                                values = []
+                                for f in rs.Fields:
+                                    try:
+                                        v = f.Value
+                                    except Exception:
+                                        v = None
+                                    values.append("" if v is None else str(v))
+                                print(",".join(values))
+                                rs.MoveNext()
+                                count += 1
+                            executed = True
+                        finally:
+                            try:
+                                rs.Close()
+                            except Exception:
+                                pass
+                finally:
+                    try:
+                        db.Close()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    if not executed:
+        # Fallback to ODBC execution for non-parameterized queries
+        cur = conn.cursor()
+        try:
+            rows = cur.execute(f"SELECT * FROM [{name}]").fetchmany(limit)
+            if rows:
+                print(f"Sample Rows (limit={limit}):")
+                cols = [c[0] for c in cur.description]
+                print(",".join(cols))
+                for r in rows:
+                    print(",".join(str(x) if x is not None else "" for x in r))
+            else:
+                print("No rows returned.")
+        except Exception as e:
+            print(f"Execution failed: {e}")
+
+
 def main() -> None:
     args = parse_args()
     if args.version:
@@ -146,7 +296,14 @@ def main() -> None:
         return
     setup_logging(args.verbose)
     if not args.analyze:
-        print("Use --analyze to run the analyzer.")
+        if args.show_query:
+            conn = _connect(args.input_path, args.dsn)
+            try:
+                show_query(conn, args.input_path, args.show_query, args.limit, args.param)
+            finally:
+                conn.close()
+        else:
+            print("Use --analyze or --show-query <name>.")
         return
     conn = _connect(args.input_path, args.dsn)
     try:
