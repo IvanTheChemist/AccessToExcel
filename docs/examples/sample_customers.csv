@@ -1,0 +1,4 @@
+CustomerID,FirstName,LastName,Email,JoinDate
+1,Ada,Lovelace,ada@example.com,2024-01-15
+2,Alan,Turing,alan@example.com,2024-02-10
+3,Grace,Hopper,grace@example.com,2024-03-05

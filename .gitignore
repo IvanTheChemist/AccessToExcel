@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Packaging / build
+.build/
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test & coverage caches
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# Type checking / lint caches
+.mypy_cache/
+.pytype/
+.ruff_cache/
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+.tmp/
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Excel/CSV export artifacts (ignored by default to avoid leaking data)
+*.xlsx
+*.csv
+out/
+exports/
+
+# Keep synthetic examples for documentation
+!docs/examples/*.csv
+!docs/examples/*.xlsx
+!docs/examples/**/README.md
